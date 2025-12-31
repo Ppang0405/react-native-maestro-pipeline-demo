@@ -11,7 +11,7 @@ env:
 jobs:
   maestro-android:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
 
     steps:
       - name: Checkout code
@@ -31,9 +31,6 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install dependencies
-        run: npm ci
-
       - name: Cache Gradle packages
         uses: actions/cache@v4
         with:
@@ -48,20 +45,12 @@ jobs:
         uses: actions/cache@v4
         with:
           path: node_modules
-          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package.json') }}
           restore-keys: |
             ${{ runner.os }}-node-
 
-      - name: Create AVD and generate snapshot for caching
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 34
-          target: google_apis
-          arch: x86_64
-          force-avd-creation: false
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
-          disable-animations: false
-          script: echo "Generated AVD snapshot for caching."
+      - name: Install dependencies
+        run: npm install
 
       - name: Build Android APK
         run: |
@@ -79,19 +68,31 @@ jobs:
           curl -Ls "https://get.maestro.mobile.dev" | bash
           echo "$HOME/.maestro/bin" >> $GITHUB_PATH
 
-      - name: Start Android Emulator & Run Maestro Tests
+      - name: Run Android Emulator & Maestro Tests
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 34
-          target: google_apis
+          api-level: 33
+          target: default
           arch: x86_64
-          force-avd-creation: false
-          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          profile: Nexus 6
+          force-avd-creation: true
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -memory 2048 -cores 2
           disable-animations: true
           script: |
-            # Wait for emulator to be ready
-            adb wait-for-device
+            # Wait for emulator to fully boot
+            adb wait-for-device shell 'while [[ -z "$(getprop sys.boot_completed)" ]]; do sleep 1; done'
+            adb shell 'while [[ "$(getprop sys.boot_completed)" != "1" ]]; do sleep 1; done'
+
+            # Unlock device
             adb shell input keyevent 82
+
+            # Disable animations to speed up tests
+            adb shell settings put global window_animation_scale 0.0
+            adb shell settings put global transition_animation_scale 0.0
+            adb shell settings put global animator_duration_scale 0.0
+
+            # Wait for device to be stable
+            sleep 10
 
             # Install the app
             adb install app-debug.apk
