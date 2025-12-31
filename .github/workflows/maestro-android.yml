@@ -10,12 +10,31 @@ env:
 
 jobs:
   maestro-android:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest-4-cores
     timeout-minutes: 90
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "/usr/local/share/boost"
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          sudo -E apt-get -y purge \
+            '^llvm.*' \
+            '^msodbcsql.*' \
+            '^mssql-tools.*' \
+            'dotnet.*' \
+            'php.*' \
+            'google.*' \
+            'az.*' \
+            '^google-cloud-sdk.*'
+          sudo -E apt-get -y autoremove --purge
+          sudo -E apt-get clean
+          df -h
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -27,9 +46,6 @@ jobs:
         with:
           distribution: 'zulu'
           java-version: '17'
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
 
       - name: Cache Gradle packages
         uses: actions/cache@v4
@@ -62,6 +78,12 @@ jobs:
           ./gradlew assembleDebug -x lint
           cp app/build/outputs/apk/debug/app-debug.apk ../app-debug.apk
           cd ..
+
+      - name: Free up space before emulator
+        run: |
+          sudo rm -rf android/.gradle
+          sudo rm -rf ~/.gradle/caches
+          df -h
 
       - name: Install Maestro
         run: |
