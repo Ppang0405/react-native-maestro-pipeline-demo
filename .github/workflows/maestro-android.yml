@@ -1,0 +1,131 @@
+name: Maestro E2E Tests (Android)
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  MAESTRO_APP_ID: com.maestropipelinedemo
+
+jobs:
+  maestro-android:
+    runs-on: ubuntu-latest-4-cores
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "/usr/local/share/boost"
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          sudo -E apt-get -y purge \
+            '^llvm.*' \
+            '^msodbcsql.*' \
+            '^mssql-tools.*' \
+            'dotnet.*' \
+            'php.*' \
+            'google.*' \
+            'az.*' \
+            '^google-cloud-sdk.*'
+          sudo -E apt-get -y autoremove --purge
+          sudo -E apt-get clean
+          df -h
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Cache Gradle packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Cache node modules
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build Android APK
+        run: |
+          # Prebuild the native code
+          npx expo prebuild --clean --platform android
+
+          # Build debug APK using Gradle
+          cd android
+          ./gradlew assembleDebug -x lint
+          cp app/build/outputs/apk/debug/app-debug.apk ../app-debug.apk
+          cd ..
+
+      - name: Free up space before emulator
+        run: |
+          sudo rm -rf android/.gradle
+          sudo rm -rf ~/.gradle/caches
+          df -h
+
+      - name: Install Maestro
+        run: |
+          curl -Ls "https://get.maestro.mobile.dev" | bash
+          echo "$HOME/.maestro/bin" >> $GITHUB_PATH
+
+      - name: Run Android Emulator & Maestro Tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 33
+          target: default
+          arch: x86_64
+          profile: Nexus 6
+          force-avd-creation: true
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -memory 2048 -cores 2
+          disable-animations: true
+          script: |
+            # Wait for emulator to fully boot
+            adb wait-for-device shell 'while [[ -z "$(getprop sys.boot_completed)" ]]; do sleep 1; done'
+            adb shell 'while [[ "$(getprop sys.boot_completed)" != "1" ]]; do sleep 1; done'
+
+            # Unlock device
+            adb shell input keyevent 82
+
+            # Disable animations to speed up tests
+            adb shell settings put global window_animation_scale 0.0
+            adb shell settings put global transition_animation_scale 0.0
+            adb shell settings put global animator_duration_scale 0.0
+
+            # Wait for device to be stable
+            sleep 10
+
+            # Install the app
+            adb install app-debug.apk
+
+            # Run Maestro tests
+            maestro test --env MAESTRO_APP_ID=$MAESTRO_APP_ID .maestro/flows
+
+      - name: Upload Maestro test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: maestro-test-results
+          path: .maestro/test-results/
+          retention-days: 7
